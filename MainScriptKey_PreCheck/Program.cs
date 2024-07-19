@@ -18,7 +18,6 @@ namespace ScriptMap
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
 
-            //string filePath = @"\\song\pete_taurim\register_settings\SDR753_SoC\V300.220.000.038\MAP\SDR753_SoC_PTE_Script_Map_dev.csv";
             string filePath = @"\\song\pete_taurim\register_settings\SDR753_SoC\V300.220.000.038_RFFE\MAP\SDR753_SoC_PTE_Script_Map_Capabilities_ilna.csv";
             string projectPath = filePath.Substring(0, filePath.IndexOf("\\register_settings"));
             string userFilePath = @"\\song\pete_taurim\RX\Bench\Sequences\GF_Char\BENCH_GAIN_CHAR\Droop script list.csv";
@@ -28,7 +27,7 @@ namespace ScriptMap
             Dictionary<string, List<string>> fullScriptMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
              // User given list
-            HashSet<string> userList = new HashSet<string>();
+            HashSet<string> scriptList = new HashSet<string>();
             using (FileStream stream = new FileStream(userFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             using (StreamReader reader = new StreamReader(stream))
             {
@@ -42,7 +41,7 @@ namespace ScriptMap
                         string[] columns = line.Split(',');
                         if (columns.Length > targetColumnIndex)
                         {
-                            userList.Add(columns[targetColumnIndex].ToUpper());
+                            scriptList.Add(columns[targetColumnIndex].ToUpper());
                         }
                     }
                 }
@@ -65,7 +64,7 @@ namespace ScriptMap
                         else
                         {
                             // Check if the first column value is in the user given list
-                            if (userList.Contains(columns[0].ToUpper()))
+                            if (scriptList.Contains(columns[0].ToUpper()))
                             {
                                 List<string> values = new List<string>();
                                 for (int i = 1; i < columns.Length; i++)
@@ -112,19 +111,13 @@ namespace ScriptMap
                 Console.WriteLine();
             }
 
-            /*            using (var writer = new StreamWriter(@"C:\Codes\MainScriptKey_PreCheck\MainScriptKey_PreCheck\output.csv"))
-                        {
-                            foreach (var pair in fullScriptMap)
-                            {
-                                string values = string.Join(",", pair.Value);
-                                writer.WriteLine("{0},{1}", pair.Key, values);
-                            }
-                        }*/
-
             // Dictionary to hold script keys and their corresponding unfound file paths
             ConcurrentDictionary<string, string> unfoundFiles = new ConcurrentDictionary<string, string>();
             // Dictionary to hold script keys and their corresponding droop headers
             ConcurrentDictionary<string, HashSet<string>> droopHeaders = new ConcurrentDictionary<string, HashSet<string>>();
+            // Dictionary to hold script keys and their corresponding script headers
+            ConcurrentDictionary<string, HashSet<string>> scriptHeaders = new ConcurrentDictionary<string, HashSet<string>>();
+
             Parallel.ForEach(fullScriptMap, item =>
             {
                 foreach (string value in item.Value)
@@ -134,28 +127,40 @@ namespace ScriptMap
                         string[] lines = File.ReadAllLines(value);
                         foreach (string line in lines)
                         {
-                            if (line.Contains(";") && line.Contains("DROOP") && line.Contains(".csv"))
+                            if (line.StartsWith(";"))
                             {
-                                string modifiedLine = line.Replace("[", "").Replace("]", "");
-                                int equalSignIndex = modifiedLine.IndexOf('=');
-                                if (equalSignIndex != -1 && equalSignIndex < modifiedLine.Length - 1)
+                                if (line.Contains("DROOP") && line.Contains(".csv"))
                                 {
-                                    string droopHeader = modifiedLine.Substring(equalSignIndex + 1).TrimEnd(',');
-                                    if (!string.IsNullOrWhiteSpace(droopHeader))
-                                    {// Split droopHeader by ; and add each part to droopHeaders
-                                     string[] parts = droopHeader.Split(';');
-                                        foreach (string part in parts)
-                                        {
-                                            if (!string.IsNullOrWhiteSpace(part))
+                                    string modifiedLine = line.Replace("[", "").Replace("]", "");
+                                    int equalSignIndex = modifiedLine.IndexOf('=');
+                                    if (equalSignIndex != -1 && equalSignIndex < modifiedLine.Length - 1)
+                                    {
+                                        string droopHeader = modifiedLine.Substring(equalSignIndex + 1).TrimEnd(',');
+                                        if (!string.IsNullOrWhiteSpace(droopHeader))
+                                        {// Split droopHeader by ; and add each part to droopHeaders
+                                            string[] parts = droopHeader.Split(';');
+                                            foreach (string part in parts)
                                             {
-                                                droopHeaders.AddOrUpdate(item.Key, new HashSet<string> { part },
-                                                    (key, existingVal) => {
-                                                        existingVal.Add(part);
-                                                        return existingVal;
-                                                    });
+                                                if (!string.IsNullOrWhiteSpace(part))
+                                                {
+                                                    droopHeaders.AddOrUpdate(item.Key, new HashSet<string> { part },
+                                                        (key, existingVal) => {
+                                                            existingVal.Add(part);
+                                                            return existingVal;
+                                                        });
+                                                }
                                             }
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    // Add other lines with ; symbol to scriptHeaders
+                                    scriptHeaders.AddOrUpdate(item.Key, new HashSet<string> { line },
+                                        (key, existingVal) => {
+                                            existingVal.Add(line);
+                                            return existingVal;
+                                        });
                                 }
                             }
                         }
@@ -167,39 +172,61 @@ namespace ScriptMap
                 }
             });
 
+            List<string> linesToWrite = new List<string>();
+            foreach (var pair in scriptHeaders)
+            {
+                // Remove trailing commas from each header
+                HashSet<string> headersWithoutTrailingCommas = new HashSet<string>(
+                    pair.Value.Select(header => header.TrimEnd(','))
+                );
+
+                string line = pair.Key + "," + string.Join(",", headersWithoutTrailingCommas);
+                linesToWrite.Add(line);
+            }
+            File.WriteAllLines(@"C:\Codes\MainScriptKey_PreCheck\MainScriptKey_PreCheck\scriptHeaders.csv", linesToWrite);
+
             // Dictionary to hold script keys and their corresponding droop file paths
-            ConcurrentDictionary<string, string> droopFiles = new ConcurrentDictionary<string, string>();
+            ConcurrentDictionary<string, List<string>> droopFiles = new ConcurrentDictionary<string, List<string>>();
 
             foreach (var headerSet in droopHeaders)
             {
                 foreach (string header in headerSet.Value)
                 {
                     string droopFilePath = Path.Combine(droopFolder, header);
-                    droopFiles.TryAdd(headerSet.Key, droopFilePath);
+                    droopFiles.AddOrUpdate(headerSet.Key, new List<string> { droopFilePath },
+                        (key, existingVal) => {
+                            existingVal.Add(droopFilePath);
+                            return existingVal;
+                        });
                 }
             }
 
             Parallel.ForEach(droopFiles, fileItem =>
             {
-                if (!File.Exists(fileItem.Value))
+                foreach (string filePath in fileItem.Value)
                 {
-                    unfoundFiles.TryAdd(fileItem.Key, fileItem.Value);
+                    if (!File.Exists(filePath))
+                    {
+                        unfoundFiles.TryAdd(fileItem.Key, filePath);
+                    }
                 }
             });
 
             // Print the list of unfound files or "All files found"
             if (unfoundFiles.Count > 0)
+            using (StreamWriter writer = new StreamWriter(@"C:\Codes\MainScriptKey_PreCheck\MainScriptKey_PreCheck\output.csv"))
             {
-                Console.WriteLine("\nUnfound files:");
-                foreach (KeyValuePair<string, string> file in unfoundFiles)
-                {
-                    Console.WriteLine("{0},{1}", file.Key, file.Value);
-                }
+                    writer.WriteLine("Key,FilePath"); // CSV header
+                    foreach (var entry in unfoundFiles)
+                    {
+                        string filePaths = string.Join(";", entry.Value); // Join multiple file paths with a semicolon
+                        writer.WriteLine($"{entry.Key},{filePaths}"); // CSV row
+                    }
             }
             else
             {
                 Console.WriteLine("All files found");
-            }
+            }          
 
             stopwatch.Stop();
             Console.WriteLine("\nTime taken: {0} ms", stopwatch.ElapsedMilliseconds);
