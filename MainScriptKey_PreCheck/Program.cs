@@ -18,15 +18,20 @@ namespace ScriptMap
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
 
-            string filePath = @"\\song\pete_taurim\register_settings\SDR753_SoC\V300.220.000.038_RFFE\MAP\SDR753_SoC_PTE_Script_Map_Capabilities_ilna.csv";
-            string projectPath = filePath.Substring(0, filePath.IndexOf("\\register_settings"));
+            //user inputs for next 3 lines
+            string filePath = @"\\song\pete_taurim\register_settings\SDR753_SoC\V300.220.000.038_RFFE\MAP\SDR753_SoC_PTE_Script_Map_Capabilities_ilna.csv";            
             string userFilePath = @"\\song\pete_taurim\RX\Bench\Sequences\GF_Char\BENCH_GAIN_CHAR\Droop script list.csv";
             string droopFolder = @"\\RFALAB-355\c$\Projects\ACORE_DIG\Documents\TauriM\ADC\DTR_Correction";
+            //user inputs end
+
+            filePath = filePath.ToUpper();
+            userFilePath = userFilePath.ToUpper();
+            droopFolder = droopFolder.ToUpper();
+            string projectPath = filePath.Substring(0, filePath.IndexOf("\\REGISTER_SETTINGS"));
             Dictionary<string, string> basePath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<string>> scriptMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<string>> fullScriptMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
-             // User given list
             HashSet<string> scriptList = new HashSet<string>();
             using (FileStream stream = new FileStream(userFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             using (StreamReader reader = new StreamReader(stream))
@@ -100,7 +105,7 @@ namespace ScriptMap
                 }
                 fullScriptMap[item.Key] = fullPaths;
             }
-            //print out fullScriptMap
+/*            //print out fullScriptMap
             foreach (KeyValuePair<string, List<string>> item in fullScriptMap)
             {
                 Console.WriteLine($"{item.Key}:");
@@ -109,7 +114,7 @@ namespace ScriptMap
                     Console.WriteLine(value);
                 }
                 Console.WriteLine();
-            }
+            }*/
 
             // Dictionary to hold script keys and their corresponding unfound file paths
             ConcurrentDictionary<string, string> unfoundFiles = new ConcurrentDictionary<string, string>();
@@ -118,6 +123,10 @@ namespace ScriptMap
             // Dictionary to hold script keys and their corresponding script headers
             ConcurrentDictionary<string, HashSet<string>> scriptHeaders = new ConcurrentDictionary<string, HashSet<string>>();
 
+            int totalItems = fullScriptMap.Count;
+            int processedItems = 0;
+
+            Console.WriteLine("Checking script components...");
             Parallel.ForEach(fullScriptMap, item =>
             {
                 foreach (string value in item.Value)
@@ -129,6 +138,13 @@ namespace ScriptMap
                         {
                             if (line.StartsWith(";"))
                             {
+                                // Add lines with ; symbol to scriptHeaders
+                                scriptHeaders.AddOrUpdate(item.Key, new HashSet<string> { line },
+                                    (key, existingVal) => {
+                                        existingVal.Add(line);
+                                        return existingVal;
+                                    });
+
                                 if (line.Contains("DROOP") && line.Contains(".csv"))
                                 {
                                     string modifiedLine = line.Replace("[", "").Replace("]", "");
@@ -153,15 +169,6 @@ namespace ScriptMap
                                         }
                                     }
                                 }
-                                else
-                                {
-                                    // Add other lines with ; symbol to scriptHeaders
-                                    scriptHeaders.AddOrUpdate(item.Key, new HashSet<string> { line },
-                                        (key, existingVal) => {
-                                            existingVal.Add(line);
-                                            return existingVal;
-                                        });
-                                }
                             }
                         }
                     }
@@ -170,7 +177,17 @@ namespace ScriptMap
                         unfoundFiles.TryAdd(item.Key, value);
                     }
                 }
+
+                // Safely increment the counter
+                int newProcessedItems = Interlocked.Increment(ref processedItems);
+
+                // Calculate the progress
+                double progress = (double)newProcessedItems / totalItems;
+
+                // Draw the progress bar
+                Console.Write("\r[{0}{1}] {2:P2}", new string('#', (int)(progress * 20)), new string(' ', 20 - (int)(progress * 20)), progress);
             });
+
 
             List<string> linesToWrite = new List<string>();
             foreach (var pair in scriptHeaders)
@@ -184,10 +201,11 @@ namespace ScriptMap
                 linesToWrite.Add(line);
             }
             File.WriteAllLines(@"C:\Codes\MainScriptKey_PreCheck\MainScriptKey_PreCheck\scriptHeaders.csv", linesToWrite);
+            Console.WriteLine("\nScript Headers can be found here: C:\\Codes\\MainScriptKey_PreCheck\\MainScriptKey_PreCheck\\scriptHeaders.csv");
 
             // Dictionary to hold script keys and their corresponding droop file paths
             ConcurrentDictionary<string, List<string>> droopFiles = new ConcurrentDictionary<string, List<string>>();
-
+                        
             foreach (var headerSet in droopHeaders)
             {
                 foreach (string header in headerSet.Value)
@@ -201,6 +219,9 @@ namespace ScriptMap
                 }
             }
 
+            Console.WriteLine("\nChecking droop files...");
+            totalItems = droopFiles.Count;
+            processedItems = 0;
             Parallel.ForEach(droopFiles, fileItem =>
             {
                 foreach (string filePath in fileItem.Value)
@@ -210,23 +231,34 @@ namespace ScriptMap
                         unfoundFiles.TryAdd(fileItem.Key, filePath);
                     }
                 }
+                // Safely increment the counter
+                int newProcessedItems = Interlocked.Increment(ref processedItems);
+
+                // Calculate the progress
+                double progress = (double)newProcessedItems / totalItems;
+
+                // Draw the progress bar
+                Console.Write("\r[{0}{1}] {2:P2}", new string('#', (int)(progress * 20)), new string(' ', 20 - (int)(progress * 20)), progress);
+
             });
 
             // Print the list of unfound files or "All files found"
             if (unfoundFiles.Count > 0)
             using (StreamWriter writer = new StreamWriter(@"C:\Codes\MainScriptKey_PreCheck\MainScriptKey_PreCheck\output.csv"))
             {
-                    writer.WriteLine("Key,FilePath"); // CSV header
+                    writer.WriteLine("Script_Key,MissingFile"); // CSV header
                     foreach (var entry in unfoundFiles)
                     {
                         string filePaths = string.Join(";", entry.Value); // Join multiple file paths with a semicolon
                         writer.WriteLine($"{entry.Key},{filePaths}"); // CSV row
                     }
-            }
+                    Console.WriteLine("\nUnfound files can be found here: C:\\Codes\\MainScriptKey_PreCheck\\MainScriptKey_PreCheck\\output.csv");
+                }
             else
             {
                 Console.WriteLine("All files found");
-            }          
+            }      
+            
 
             stopwatch.Stop();
             Console.WriteLine("\nTime taken: {0} ms", stopwatch.ElapsedMilliseconds);
